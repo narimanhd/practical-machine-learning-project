@@ -1,0 +1,165 @@
+---
+title: "Practical Machin Learining Project"
+author: "Nariman Hayatdavoud"
+date: "2022-08-13"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Overview
+This is the final report for Coursera’s Practical Machine Learning course, as part of the Data Science Specialization track offered by John Hopkins.
+
+In this project, we will use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants to predict the manner in which they did the exercise. This is the “classe” variable in the training set. We train 4 models: Decision Tree, Random Forest, Gradient Boosted Trees, Support Vector Machine using k-folds cross validation on the training set. We then predict using a validation set randomly selected from the training csv data to obtain the accuracy and out of sample error rate. Based on those numbers, we decide on the best model, and use it to predict 20 cases using the test csv set. (Data Links are Below - Local versions: Downloaded June 16/2020)
+
+Background
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: (http://groupware.les.inf.puc-rio.br/har) (see the section on the Weight Lifting Exercise Dataset).
+
+The training data for this project are available here:
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here:
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+The data for this project come from this source: http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har. If you use the document you create for this class for any purpose please cite them as they have been very generous in allowing their data to be used for this kind of assignment.
+
+```{r}
+library(data.table)
+library(mlbench)
+library(caret)
+library(klaR)
+library(randomForest)
+library(rattle)
+library(rpart)
+library(rpart.plot)
+```
+
+The training data for this project are available here: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+I don't need to download the data in my pc, I can load them to memory.
+```{r}
+TrainingData <- fread("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", header=T, na.strings=c("NA","#DIV/0!",""))
+TestingData <- fread("http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", header=T, na.strings=c("NA","#DIV/0!",""))
+dim(TrainingData)
+dim(TestingData)
+```
+
+Now, I give a look at the data using the commands "summary(Training Date)" and "str(Training Date)" and, since I have 160 columns, I extract the names of the columns.
+I don't include the output of "summary" and "str" because these commands extract a lot of rows but I think that the list of the names is important to know.
+
+```{r}
+names(TrainingData)
+```
+
+So I have several columns with the values "NA", and also many columns contain measures that do not interest me at this time (I want the variables for belt, arm and forearm).
+So the next step is to create a subset of data with measurements that interest me and wirh the addition of the column "result".
+The first thing to do is use "sapply" on the TrainingData and retrive all variable with NA or blank then use the list to subset the main set of data.
+```{r}
+List_Na <- sapply(TrainingData, function (x) any(is.na(x)))
+newTrainingData <- subset(TrainingData, select=c("classe", names(List_Na)[!List_Na & grepl("belt|[^(fore)]arm|dumbbell|forearm", names(List_Na))]))
+```
+
+Then, I have to convert classe to a Factor data type, so that caret builds a classification instead of a regression model.
+```{r}
+newTrainingData <- newTrainingData[, classe := factor(newTrainingData[, classe])]
+newTrainingData[, .N, classe]
+```
+Last thing to do is split the training data in two batch, a 60% training data and a 40% testing data.
+```{r}
+inTrain <- createDataPartition(newTrainingData$classe, p=0.6, list=FALSE)
+Train_data <- newTrainingData[inTrain, ]
+Test_data <- newTrainingData[-inTrain, ]
+```
+
+Then I check if in my batch there are near-zero variance predictors
+```{r}
+nzv <- nearZeroVar(Train_data, saveMetrics=TRUE)
+nzv
+```
+I don't have any predictors with near-zero variance so I can proceed with building my model.
+
+### Building Model
+
+To fit a model to the data I use the function "train" and a partial least squares discriminant analysis (PLSDA) model to start.
+
+```{r}
+set.seed(12345)
+ctrl <- trainControl(method = "repeatedcv", repeats = 3, classProbs = TRUE, summaryFunction = defaultSummary)
+plsFit <- train(classe ~ ., data = Train_data, method = "pls", tuneLength = 15, trControl = ctrl, metric = "ROC", preProc = c("center","scale"))
+plsFit
+```
+
+In this output the grid of results are the average resampled estimates of performance.
+Then I use "predict" to apply the model on my test data. 
+
+```{r}
+plsClasses <- predict(plsFit, newdata = Test_data)
+str(plsClasses)
+```
+I can also calculate this using the option type = "prob" to compute class probabilities from the model.
+```{r}
+plsProbs <- predict(plsFit, newdata = Test_data, type = "prob")
+head(plsProbs)
+```
+
+I use a plot to display the result in a best manner.
+
+```{r}
+trellis.par.set(caretTheme())
+plot(plsFit, metric = "Kappa")
+```
+
+The plot show the relationship between the number of PLS components and the resampled estimate of the area under the ROC curve.
+And then, finally, I take a look to the confusion matrix and associated statistics.
+
+```{r}
+confusionMatrix(plsClasses, Test_data$classe)
+```
+I can apply another model like the "regularized discriminant analysis" model 
+```{r}
+set.seed(123)
+rdaFit <- train(classe ~ ., data = Train_data, method = "rda", tuneGrid = data.frame(gamma = (0:4)/4, lambda = 3/4), trControl = ctrl, metric = "ROC")
+rdaFit
+rdaClasses <- predict(rdaFit, newdata = Test_data)
+confusionMatrix(rdaClasses, Test_data$classe)
+```
+and see how these two models (pls, rda) compare in terms of their resampling results.
+```{r}
+resamps <- resamples(list(pls = plsFit, rda = rdaFit))
+summary(resamps)
+diffs <- diff(resamps)
+summary(diffs)
+```
+And then a plot to visualise the result
+```{r}
+xyplot(resamps, what = "BlandAltman")
+```
+
+I can now also try the "Random Forest" model:
+```{r}
+rfFit <- train(classe~., data=Train_data, method="rf", tuneGrid=expand.grid(.mtry=sqrt(ncol(Train_data[,2:53]))), trControl=ctrl)
+rfFit
+rfClasses <- predict(rfFit, newdata = Test_data)
+confusionMatrix(rfClasses, Test_data$classe)
+```
+
+The accuracy of this model is 99.5%
+I look closely to the final model, i can extract the variables that compone the model and see the confusion matrix of this model with the class.error. The class error is less tha 1%
+```{r}
+varImp(rfFit)
+rfFit$finalModel
+```
+
+## Conclusion
+
+Now I can try to use this model on my original tasting batch of data and so:
+```{r}
+TestResult <- predict(rfFit, newdata=TestingData)
+TestResult
+```
